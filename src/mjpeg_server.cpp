@@ -82,6 +82,21 @@ MJPEGServer::MJPEGServer(ros::NodeHandle& node) :
 {
   ros::NodeHandle private_nh("~");
   private_nh.param("port", port_, 8080);
+  XmlRpc::XmlRpcValue wl;
+  if (private_nh.getParam("topic_wl", wl)) {
+    ROS_WARN("safe operation enabled, only whitelisted topics are allowed.");
+    ROS_ASSERT(wl.getType() == XmlRpc::XmlRpcValue::TypeArray);
+    for (int32_t i = 0; i < wl.size(); ++i) 
+    {
+      ROS_ASSERT(wl[i].getType() == XmlRpc::XmlRpcValue::TypeString);
+      std::string t=static_cast<std::string>(wl[i]);
+      topics_wl.insert(t);
+      ROS_WARN("added to white list: %s", t.c_str());
+    }
+  }
+
+
+
   header = "Connection: close\r\nServer: mjpeg_server\r\n"
       "Cache-Control: no-cache, no-store, must-revalidate, pre-check=0, post-check=0, max-age=0\r\n"
       "Pragma: no-cache\r\n";
@@ -425,10 +440,14 @@ ImageBuffer* MJPEGServer::getImageBuffer(const std::string& topic)
   ImageSubscriberMap::iterator it = image_subscribers_.find(topic);
   if (it == image_subscribers_.end())
   {
-    image_subscribers_[topic] = image_transport_.subscribe(topic, 1,
+    if (topics_wl.empty() || topics_wl.find(topic)!=topics_wl.end()) {
+	    image_subscribers_[topic] = image_transport_.subscribe(topic, 1,
                                                            boost::bind(&MJPEGServer::imageCallback, this, _1, topic));
-    image_buffers_[topic] = new ImageBuffer();
-    ROS_INFO("Subscribing to topic %s", topic.c_str());
+    	image_buffers_[topic] = new ImageBuffer();
+        ROS_INFO("Subscribing to topic %s", topic.c_str());
+    } else {
+	ROS_ERROR("not allowed to subscribe to topic %s", topic.c_str());
+    }
   }
   ImageBuffer* image_buffer = image_buffers_[topic];
   return image_buffer;

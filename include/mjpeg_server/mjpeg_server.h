@@ -40,6 +40,7 @@
 #include <sensor_msgs/Image.h>
 #include <image_transport/image_transport.h>
 #include <cv_bridge/cv_bridge.h>
+//#include <set>
 
 #include <boost/thread/mutex.hpp>
 #include <boost/thread/condition.hpp>
@@ -145,6 +146,7 @@ public:
   void client(int fd);
 
 private:
+  typedef std::set<std::string> TopicsWL;
   typedef std::map<std::string, ImageBuffer*> ImageBufferMap;
   typedef std::map<std::string, image_transport::Subscriber> ImageSubscriberMap;
   typedef std::map<std::string, std::string> ParameterMap;
@@ -297,6 +299,8 @@ private:
   ImageBufferMap image_buffers_;
   ImageSubscriberMap image_subscribers_;
   boost::mutex image_maps_mutex_;
+  TopicsWL topics_wl;
+
 
 };
 
