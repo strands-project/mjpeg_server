@@ -440,13 +440,14 @@ ImageBuffer* MJPEGServer::getImageBuffer(const std::string& topic)
   ImageSubscriberMap::iterator it = image_subscribers_.find(topic);
   if (it == image_subscribers_.end())
   {
+    image_buffers_[topic] = new ImageBuffer();
     if (topics_wl.empty() || topics_wl.find(topic)!=topics_wl.end()) {
 	    image_subscribers_[topic] = image_transport_.subscribe(topic, 1,
                                                            boost::bind(&MJPEGServer::imageCallback, this, _1, topic));
-    	image_buffers_[topic] = new ImageBuffer();
         ROS_INFO("Subscribing to topic %s", topic.c_str());
     } else {
 	ROS_ERROR("not allowed to subscribe to topic %s", topic.c_str());
+	
     }
   }
   ImageBuffer* image_buffer = image_buffers_[topic];
