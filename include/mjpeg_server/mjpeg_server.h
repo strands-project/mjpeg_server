@@ -153,6 +153,8 @@ private:
 
   std::string header;
 
+  bool sendFrame(int fd, const ImageBuffer* image_buffer, ParameterMap& parameter_map, unsigned char*& frame,  char* buffer);
+
   ImageBuffer* getImageBuffer(const std::string& topic);
 
   void imageCallback(const sensor_msgs::ImageConstPtr& msg, const std::string& topic);
