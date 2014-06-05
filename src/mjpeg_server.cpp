@@ -473,11 +473,9 @@ void MJPEGServer::invertImage(const cv::Mat& input, cv::Mat& output)
 
 void MJPEGServer::sendStream(int fd, const char *parameter)
 {
-  unsigned char *frame = NULL, *tmp = NULL;
-  int frame_size = 0, max_frame_size = 0;
-  int tenk = 10 * 1024;
+  unsigned char *frame = NULL;
   char buffer[BUFFER_SIZE] = {0};
-  double timestamp;
+
   //sensor_msgs::CvBridge image_bridge;
   //sensor_msgs::cv_bridge image_bridge;
   cv_bridge::CvImage image_bridge;
@@ -512,127 +510,149 @@ void MJPEGServer::sendStream(int fd, const char *parameter)
 
   ROS_DEBUG("Headers send, sending stream now");
 
+  // send one frame anyway
+  {
+  	boost::unique_lock<boost::mutex> lock(image_buffer->mutex_);
+  	if (image_buffer->msg.encoding.length()>0) {
+  		ROS_INFO("send first frame without waiting for a topic update: encoding=%s", image_buffer->msg.encoding.c_str());
+  		sendFrame(fd, image_buffer, parameter_map, frame, buffer);
+  	}
+  }
+
   while (!stop_requested_)
   {
     {
       /* wait for fresh frames */
       boost::unique_lock<boost::mutex> lock(image_buffer->mutex_);
+      ROS_DEBUG("waiting for new frame");
       image_buffer->condition_.wait(lock);
-
-      //IplImage* image;
-      cv_bridge::CvImagePtr cv_msg;
-      try
-      {
-        if (cv_msg = cv_bridge::toCvCopy(image_buffer->msg, "bgr8"))
-        {
-          ;    //image = image_bridge.toIpl();
-        }
-        else
-        {
-          ROS_ERROR("Unable to convert %s image to bgr8", image_buffer->msg.encoding.c_str());
-          return;
-        }
-      }
-      catch (...)
-      {
-        ROS_ERROR("Unable to convert %s image to ipl format", image_buffer->msg.encoding.c_str());
-        return;
-      }
-
-      // encode image
-      cv::Mat img = cv_msg->image;
-      std::vector<uchar> encoded_buffer;
-      std::vector<int> encode_params;
-
-      // invert
-      //int invert = 0;
-      if (parameter_map.find("invert") != parameter_map.end())
-      {
-        cv::Mat cloned_image = img.clone();
-        invertImage(cloned_image, img);
-      }
-
-      // quality
-      int quality = 95;
-      if (parameter_map.find("quality") != parameter_map.end())
-      {
-        quality = stringToInt(parameter_map["quality"]);
-      }
-      encode_params.push_back(CV_IMWRITE_JPEG_QUALITY);
-      encode_params.push_back(quality);
-
-      // resize image
-      if (parameter_map.find("width") != parameter_map.end() && parameter_map.find("height") != parameter_map.end())
-      {
-        int width = stringToInt(parameter_map["width"]);
-        int height = stringToInt(parameter_map["height"]);
-        if (width > 0 && height > 0)
-        {
-          cv::Mat img_resized;
-          cv::Size new_size(width, height);
-          cv::resize(img, img_resized, new_size);
-          cv::imencode(".jpeg", img_resized, encoded_buffer, encode_params);
-        }
-        else
-        {
-          cv::imencode(".jpeg", img, encoded_buffer, encode_params);
-        }
-      }
-      else
-      {
-        cv::imencode(".jpeg", img, encoded_buffer, encode_params);
-      }
-
-      // copy encoded frame buffer
-      frame_size = encoded_buffer.size();
-
-      /* check if frame buffer is large enough, increase it if necessary */
-      if (frame_size > max_frame_size)
-      {
-        ROS_DEBUG("increasing frame buffer size to %d", frame_size);
-
-        max_frame_size = frame_size + tenk;
-        if ((tmp = (unsigned char*)realloc(frame, max_frame_size)) == NULL)
-        {
-          free(frame);
-          sendError(fd, 500, "not enough memory");
-          return;
-        }
-        frame = tmp;
-      }
-
-      /* copy v4l2_buffer timeval to user space */
-      timestamp = ros::Time::now().toSec();
-
-      memcpy(frame, &encoded_buffer[0], frame_size);
-      ROS_DEBUG("got frame (size: %d kB)", frame_size / 1024);
-    }
-
-    /*
-     * print the individual mimetype and the length
-     * sending the content-length fixes random stream disruption observed
-     * with firefox
-     */
-    sprintf(buffer, "Content-Type: image/jpeg\r\n"
-            "Content-Length: %d\r\n"
-            "X-Timestamp: %.06lf\r\n"
-            "\r\n",
-            frame_size, (double)timestamp);
-    ROS_DEBUG("sending intemdiate header");
-    if (write(fd, buffer, strlen(buffer)) < 0)
-      break;
-
-    ROS_DEBUG("sending frame");
-    if (write(fd, frame, frame_size) < 0)
-      break;
-
-    ROS_DEBUG("sending boundary");
-    sprintf(buffer, "\r\n--boundarydonotcross \r\n");
-    if (write(fd, buffer, strlen(buffer)) < 0)
-      break;
+      ROS_DEBUG("got new frame, send it to clients");
+      if (!sendFrame(fd, image_buffer, parameter_map, frame, buffer))
+      	break;
+  	}
   }
 
   free(frame);
+}
+
+
+bool MJPEGServer::sendFrame(int fd, const ImageBuffer* image_buffer, ParameterMap& parameter_map, unsigned char*& frame, char* buffer) {
+  int frame_size = 0, max_frame_size = 0;
+  int tenk = 10 * 1024;
+  double timestamp;
+  unsigned char *tmp = NULL;
+
+  cv_bridge::CvImagePtr cv_msg;
+  try
+  {
+    if (cv_msg = cv_bridge::toCvCopy(image_buffer->msg, "bgr8"))
+    {
+      ;    //image = image_bridge.toIpl();
+    }
+    else
+    {
+      ROS_ERROR("Unable to convert %s image to bgr8", image_buffer->msg.encoding.c_str());
+      return false;
+    }
+  }
+  catch (...)
+  {
+    ROS_ERROR("Unable to convert %s image to ipl format", image_buffer->msg.encoding.c_str());
+    return false;
+  }
+
+  // encode image
+  cv::Mat img = cv_msg->image;
+  std::vector<uchar> encoded_buffer;
+  std::vector<int> encode_params;
+
+  // invert
+  //int invert = 0;
+  if (parameter_map.find("invert") != parameter_map.end())
+  {
+    cv::Mat cloned_image = img.clone();
+    invertImage(cloned_image, img);
+  }
+
+  // quality
+  int quality = 95;
+  if (parameter_map.find("quality") != parameter_map.end())
+  {
+    quality = stringToInt(parameter_map["quality"]);
+  }
+  encode_params.push_back(CV_IMWRITE_JPEG_QUALITY);
+  encode_params.push_back(quality);
+
+  // resize image
+  if (parameter_map.find("width") != parameter_map.end() && parameter_map.find("height") != parameter_map.end())
+  {
+    int width = stringToInt(parameter_map["width"]);
+    int height = stringToInt(parameter_map["height"]);
+    if (width > 0 && height > 0)
+    {
+      cv::Mat img_resized;
+      cv::Size new_size(width, height);
+      cv::resize(img, img_resized, new_size);
+      cv::imencode(".jpeg", img_resized, encoded_buffer, encode_params);
+    }
+    else
+    {
+      cv::imencode(".jpeg", img, encoded_buffer, encode_params);
+    }
+  }
+  else
+  {
+    cv::imencode(".jpeg", img, encoded_buffer, encode_params);
+  }
+
+  // copy encoded frame buffer
+  frame_size = encoded_buffer.size();
+
+  /* check if frame buffer is large enough, increase it if necessary */
+  if (frame_size > max_frame_size)
+  {
+    ROS_DEBUG("increasing frame buffer size to %d", frame_size);
+
+    max_frame_size = frame_size + tenk;
+    if ((tmp = (unsigned char*)realloc(frame, max_frame_size)) == NULL)
+    {
+      free(frame);
+      sendError(fd, 500, "not enough memory");
+      return false;
+    }
+    frame = tmp;
+  }
+
+  /* copy v4l2_buffer timeval to user space */
+  timestamp = ros::Time::now().toSec();
+
+  memcpy(frame, &encoded_buffer[0], frame_size);
+  ROS_DEBUG("got frame (size: %d kB)", frame_size / 1024);
+
+
+	/*
+	 * print the individual mimetype and the length
+	 * sending the content-length fixes random stream disruption observed
+	 * with firefox
+	 */
+	sprintf(buffer, "Content-Type: image/jpeg\r\n"
+	        "Content-Length: %d\r\n"
+	        "X-Timestamp: %.06lf\r\n"
+	        "\r\n",
+	        frame_size, (double)timestamp);
+	ROS_DEBUG("sending intermediate header");
+	if (write(fd, buffer, strlen(buffer)) < 0)
+	  return false;
+
+	ROS_DEBUG("sending frame %d %p", frame_size, frame);
+	if (write(fd, frame, frame_size) < 0)
+	  return false;
+
+	ROS_DEBUG("sending boundary");
+	sprintf(buffer, "\r\n--boundarydonotcross \r\n");
+	if (write(fd, buffer, strlen(buffer)) < 0)
+	  return false;
+	return true;
 }
 
 void MJPEGServer::sendSnapshot(int fd, const char *parameter)
